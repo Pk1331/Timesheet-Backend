@@ -56,13 +56,14 @@ MIDDLEWARE = [
 CORS_ALLOW_CREDENTIALS = True  
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
-    "https://timesheet-ui-inky.vercel.app"
+    "https://timesheet-ui-inky.vercel.app",
+    "https://timesheet-backend-4bj0.onrender.com",
     
 ]
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "https://timesheet-ui-inky.vercel.app", 
-   
+   "https://timesheet-backend-4bj0.onrender.com",
 ]
 
 ROOT_URLCONF = 'backend.urls'
