@@ -64,7 +64,7 @@ class CustomTokenObtainPairView(APIView):
 
         cookie_settings = {
             "httponly": True,
-            "secure": False,  # Set to True on production with HTTPS
+            "secure": True,  # Set to True on production with HTTPS
             "samesite": "Lax",
             "max_age": 60 * 60,
         }
