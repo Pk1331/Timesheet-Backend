@@ -65,7 +65,7 @@ class CustomTokenObtainPairView(APIView):
         cookie_settings = {
             "httponly": True,
             "secure": True,  # Set to True on production with HTTPS
-            "samesite": "Lax",
+            "samesite": "None", # Use "None" for cross-site requests, "Lax" for same-site
             "max_age": 60 * 60,
         }
 
@@ -75,8 +75,9 @@ class CustomTokenObtainPairView(APIView):
             str(refresh),
             max_age=7 * 24 * 60 * 60,
             httponly=True,
-            secure=False,
-            samesite="Lax"
+            secure=True, # Set to True on production with HTTPS
+            samesite="None"  # Use "None" for cross-site requests, "Lax" for same-site
+            # samesite="Lax" if you want to restrict to same-site requests
         )
 
         return response
@@ -104,8 +105,8 @@ class RefreshTokenView(APIView):
                 str(access),
                 httponly=True,
                 max_age=60 * 60,
-                secure=False,
-                samesite="Lax"
+                secure=True,
+                samesite="None"  # Use "None" for cross-site requests, "Lax" for same-site
             )
             return response
         except Exception:
