@@ -1,26 +1,23 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import permissions, status
-from timesheet_app.models import CustomUser
+from timesheet_app.models import CustomUser, Notification
 from timesheet_app.utils import send_telegram_message
-import logging
+from timesheet_app.notification_ws import send_notification_to_user
 import json
 
-logger = logging.getLogger(__name__)
-
+# --------------------- TELEGRAM MESSAGES ---------------------
 class CustomMessageView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
-        logger.info("Received a request to send a Telegram message.")
         data = request.data
-        file = request.FILES.get("file") 
-
+        file = request.FILES.get("file")
         user_ids = data.get("users", [])
-        message = data.get("message", "").strip()
+        original_message = data.get("message", "").strip()
+        sender = request.user
 
-        # Convert string users to a list if needed
-        if isinstance(user_ids, str):  
+        if isinstance(user_ids, str):
             try:
                 user_ids = json.loads(user_ids)
             except json.JSONDecodeError:
@@ -29,7 +26,7 @@ class CustomMessageView(APIView):
                     "status": "failure"
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-        if not user_ids or not message:
+        if not user_ids or not original_message:
             return Response({
                 "message": "Message sending failed",
                 "status": "failure",
@@ -44,17 +41,25 @@ class CustomMessageView(APIView):
                 "error": "Selected users do not exist."
             }, status=status.HTTP_400_BAD_REQUEST)
 
+        full_message = f"<b>From {sender.get_full_name() or sender.username}:</b>\n{original_message}"
         failed_users = []
+
         for user in users:
             try:
                 chat_id = user.chat_id
                 if not chat_id:
                     failed_users.append(user.username)
                     continue
-                
-                send_telegram_message(chat_id, message, file)
-            except Exception as e:
-                logger.error(f"Failed to send message to {user.username}: {str(e)}", exc_info=True)
+
+                send_telegram_message(chat_id, full_message, file)
+
+                notification = Notification.objects.create(
+                    user=user,
+                    message=full_message
+                )
+                send_notification_to_user(notification)
+
+            except Exception:
                 failed_users.append(user.username)
 
         if failed_users:

@@ -1,10 +1,11 @@
 from rest_framework.views import APIView
 from rest_framework import permissions, status
-from timesheet_app.models import Project,CustomUser, Team
+from timesheet_app.models import Project,CustomUser, Team,Notification
 from rest_framework.response import Response
 from timesheet_app.utils import send_telegram_message
+from timesheet_app.notification_ws import send_notification_to_user
 
-# Create Project
+# --------------------- CREATE PROJECT ---------------------
 class CreateProjectView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -37,7 +38,7 @@ class CreateProjectView(APIView):
         except Exception as e:
             return Response({"message": "Failed to create project", "status": "failure"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-# Fetch Projects Based on the User Type
+# --------------------- FETCH PROJECTS ---------------------
 class FetchProjectsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -98,7 +99,7 @@ class FetchProjectsView(APIView):
             for project in projects
         ]
 
-# Fetch Assigned Projects Based on the User Type
+# --------------------- FETCH ASSIGNED PROJECTS ---------------------
 class FetchAssignedProjectsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -169,7 +170,7 @@ class FetchAssignedProjectsView(APIView):
 
         return Response({"message": "Permission denied", "status": "failure"}, status=status.HTTP_403_FORBIDDEN)
 
-# Edit Project
+# --------------------- EDIT PROJECT ---------------------
 class EditProjectView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -194,36 +195,38 @@ class EditProjectView(APIView):
         except Exception as e:
             return Response({"message": "Failed to update project", "status": "failure"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-# Delete Project
+# --------------------- DELETE PROJECT ---------------------
 class DeleteProjectView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def delete(self, request, project_id, *args, **kwargs):
         try:
-            
+            user = request.user
             project = Project.objects.get(id=project_id)
-          
-            users_to_notify = set() 
+            users_to_notify = set()
+            teams = project.teams.all()
+    
+            for team in teams:
+                members = team.members.all()
+                users_to_notify.update(members)
 
-            for team in project.teams.all(): 
-                users_to_notify.update(team.members.all())  
+                # Handle account_managers (ManyToManyField)
+                for manager in team.account_managers.all():
+                    users_to_notify.add(manager)
 
-                if team.account_manager:
-                    users_to_notify.add(team.account_manager)
-                if team.team_leader_search:
-                    users_to_notify.add(team.team_leader_search)
-                if team.team_leader_development:
-                    users_to_notify.add(team.team_leader_development)
-                if team.team_leader_creative:
-                    users_to_notify.add(team.team_leader_creative)
-
+                # Handle team leads (ForeignKey fields)
+                for role in ["team_leader_search", "team_leader_development", "team_leader_creative"]:
+                    role_user = getattr(team, role, None)
+                    if role_user:
+                        users_to_notify.add(role_user)
 
             for user in users_to_notify:
                 message = f"The project <b>{project.name}</b> has been deleted. You have been removed from this project."
                 send_telegram_message(user.chat_id, message)
-
+                notification  = Notification.objects.create(user=user, message=message)
+                send_notification_to_user(notification)
+                
             project.delete()
-
             return Response(
                 {"message": "Project deleted successfully", "status": "success"},
                 status=status.HTTP_200_OK,
@@ -240,6 +243,7 @@ class DeleteProjectView(APIView):
                 {"message": "Failed to delete project", "status": "failure"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
 
 """
  Un used

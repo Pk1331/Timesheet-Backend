@@ -4,7 +4,7 @@ from timesheet_app.models import CustomUser,Timesheet
 from rest_framework.response import Response
 from django.db.models import Q,Sum
 
-# Fetch a specific user's details for profile
+# --------------------- FETCH PROFILE INFO ---------------------
 class FetchUserDetailsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -25,7 +25,7 @@ class FetchUserDetailsView(APIView):
         except CustomUser.DoesNotExist:
             return Response({"message": "User not found", "status": "failure"}, status=status.HTTP_404_NOT_FOUND)
 
-# Update Profile
+# --------------------- UPDATE PROFILE INFO ---------------------
 class UpdateProfileView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -119,10 +119,17 @@ class FetchWorkingHoursView(APIView):
 
         return Response({"working_hours": working_hours_data}, status=status.HTTP_200_OK)
 
+# --------------------- Fetch ALL USERS FOR TELEGRAM  ---------------------
 class FetchAllUsers(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        users = CustomUser.objects.exclude(username="Narayan") 
-        user_data = [{"id": user.id, "username": user.username, "team": user.team} for user in users]
+        users = CustomUser.objects.exclude(id=request.user.id) \
+                                  .exclude(is_superuser=True) \
+                                  .exclude(usertype="SuperAdmin")  
+
+        user_data = [
+            {"id": user.id, "username": user.username, "team": user.team}
+            for user in users
+        ]
         return Response({"users": user_data}, status=status.HTTP_200_OK)

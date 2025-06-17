@@ -1,14 +1,15 @@
 from rest_framework.views import APIView
 from rest_framework import permissions, status
-from timesheet_app.models import CustomUser, Task, Project
+from timesheet_app.models import CustomUser, Task, Project,Notification
 from rest_framework.response import Response
 from timesheet_app.utils import send_telegram_message
+from timesheet_app.notification_ws import send_notification_to_user
 from django.db.models import Q
 import logging
 logger  = logging.getLogger(__name__)
 
 
-# Create Task
+# --------------------- CREATE TASKS---------------------
 class CreateTaskView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -21,20 +22,68 @@ class CreateTaskView(APIView):
         priority = data.get('priority', 'Medium')
         start_date = data.get('start_date')
         end_date = data.get('end_date')
-        created_by = request.user  
+        created_by = request.user
         assigned_to_id = data.get('assigned_to')
+
         try:
             project = Project.objects.get(id=project_id)
-            print(project)
             assigned_to = CustomUser.objects.get(id=assigned_to_id) if assigned_to_id else None
 
-            if created_by.usertype == 'SuperAdmin' and assigned_to and assigned_to.usertype != 'Admin':
-                return Response({"message": "SuperAdmin can only assign tasks to Admins"}, status=status.HTTP_400_BAD_REQUEST)
-            if created_by.usertype == 'Admin' and assigned_to and assigned_to.usertype != 'TeamLeader':
-                return Response({"message": "Admin can only assign tasks to TeamLeaders"}, status=status.HTTP_400_BAD_REQUEST)
-            if created_by.usertype == 'TeamLeader' and assigned_to and assigned_to.usertype != 'User':
-                return Response({"message": "TeamLeader can only assign tasks to Users"}, status=status.HTTP_400_BAD_REQUEST)
+            if created_by.usertype == 'SuperAdmin':
+                valid_users = []
 
+                for team in project.teams.all():
+                    valid_users.extend(team.account_managers.all())
+                    if team.team_leader_search:
+                        valid_users.append(team.team_leader_search)
+                    if team.team_leader_development:
+                        valid_users.append(team.team_leader_development)
+                    if team.team_leader_creative:
+                        valid_users.append(team.team_leader_creative)
+                    valid_users.extend(team.members.all())
+
+                if assigned_to not in valid_users:
+                    return Response(
+                        {"message": "SuperAdmin can only assign tasks within the selected project"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            elif created_by.usertype == 'Admin':
+                valid_users = []
+
+                for team in project.teams.all():
+                    if team.team_leader_search:
+                        valid_users.append(team.team_leader_search)
+                    if team.team_leader_development:
+                        valid_users.append(team.team_leader_development)
+                    if team.team_leader_creative:
+                        valid_users.append(team.team_leader_creative)
+                    valid_users.extend(team.members.all())
+
+                if assigned_to not in valid_users or assigned_to.usertype in ['Admin', 'SuperAdmin']:
+                    return Response(
+                        {"message": "Admin can assign tasks only to TeamLeaders or Users in the selected project"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            elif created_by.usertype == 'TeamLeader':
+                is_valid = False
+                for team in project.teams.all():
+                    if (
+                        (team.team_leader_search == created_by and assigned_to in team.members.filter(team='Search')) or
+                        (team.team_leader_development == created_by and assigned_to in team.members.filter(team='Development')) or
+                        (team.team_leader_creative == created_by and assigned_to in team.members.filter(team='Creative'))
+                    ):
+                        is_valid = True
+                        break
+
+                if not is_valid:
+                    return Response(
+                        {"message": "TeamLeader can only assign tasks to their own team members"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            # Create task
             task = Task.objects.create(
                 title=title,
                 description=description,
@@ -45,7 +94,7 @@ class CreateTaskView(APIView):
                 end_date=end_date,
                 created_by=created_by,
             )
-           
+
             if created_by.usertype == 'SuperAdmin':
                 task.superadmin_assigned_to = assigned_to
             elif created_by.usertype == 'Admin':
@@ -54,29 +103,34 @@ class CreateTaskView(APIView):
                 task.teamleader_assigned_to = assigned_to
 
             task.save()
-            
+
             if assigned_to and assigned_to.chat_id:
                 message = (
-                        f"📢 <b>New Task Assigned</b>\n\n"
-                        f"🔹 <b>Title:</b> {task.title}\n"
-                        f"🏗 <b>Project:</b> {task.project.name}\n"  
-                        f"📝 <b>Description:</b> {task.description}\n"
-                        f"📌 <b>Priority:</b> {task.priority}\n"
-                        f"📅 <b>Deadline:</b> {task.end_date}\n"
-                        f"👤 <b>Assigned By:</b> {created_by.username}"
-                    )
+                    f"📢 <b>New Task Assigned</b>\n\n"
+                    f"🔹 <b>Title:</b> {task.title}\n"
+                    f"🏗 <b>Project:</b> {task.project.name}\n"
+                    f"📝 <b>Description:</b> {task.description}\n"
+                    f"📌 <b>Priority:</b> {task.priority}\n"
+                    f"📅 <b>Deadline:</b> {task.end_date}\n"
+                    f"👤 <b>Assigned By:</b> {created_by.username}"
+                )
                 send_telegram_message(assigned_to.chat_id, message)
-            return Response({"message": "Task created successfully", "task_id": task.id}, status=status.HTTP_201_CREATED)
+                notification = Notification.objects.create(user=assigned_to, message=message)
+                send_notification_to_user(notification)
+
+            return Response(
+                {"message": "Task created successfully", "task_id": task.id},
+                status=status.HTTP_201_CREATED,
+            )
 
         except Project.DoesNotExist:
             return Response({"message": "Project not found"}, status=status.HTTP_404_NOT_FOUND)
         except CustomUser.DoesNotExist:
             return Response({"message": "Assigned user not found"}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
-            print(str(e))
             return Response({"message": f"Error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-# Fetch Tasks in the TaskList
+# --------------------- FETCH TASKS---------------------
 class FetchTasksView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request, *args, **kwargs):
@@ -129,7 +183,7 @@ class FetchTasksView(APIView):
             status=status.HTTP_200_OK,
         )
 
-# Saving Data After Editing Task
+# --------------------- EDIT TASKS---------------------
 class EditTaskView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -207,6 +261,8 @@ class EditTaskView(APIView):
                         f"You have been unassigned from this task."
                     )
                     send_telegram_message(old_assigned_to.chat_id, message_old)
+                    notification = Notification.objects.create(user=old_assigned_to, message=message_old)
+                    send_notification_to_user(notification)
 
             if new_assigned_to and old_assigned_to != new_assigned_to:
                 if new_assigned_to.chat_id:
@@ -218,6 +274,8 @@ class EditTaskView(APIView):
                         f"Please check your task list for details."
                     )
                     send_telegram_message(new_assigned_to.chat_id, message_new)
+                    notification = Notification.objects.create(user=new_assigned_to, message=message_new)
+                    send_notification_to_user(notification)
 
             return Response(
                 {
@@ -241,7 +299,7 @@ class EditTaskView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-# Delete Task
+# --------------------- DELETE TASKS---------------------
 class DeleteTaskView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -262,6 +320,8 @@ class DeleteTaskView(APIView):
                     f"Please contact {request.user.username} for further details."
                 )
                 send_telegram_message(assigned_user.chat_id, message)  
+                notification = Notification.objects.create(user=assigned_user, message=message)
+                send_notification_to_user(notification)
 
             task.delete()
             return Response(
@@ -280,7 +340,7 @@ class DeleteTaskView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-# Assign Task to Others
+# --------------------- ASSIGN TASKS---------------------
 class AssignTaskView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -327,6 +387,8 @@ class AssignTaskView(APIView):
                         f"You have been unassigned from this task."
                     )
                     send_telegram_message(old_assigned_to.chat_id, message_old)
+                    notification = Notification.objects.create(user=old_assigned_to, message=message_old)
+                    send_notification_to_user(notification)
 
             if assigned_to and old_assigned_to != assigned_to:
                 if assigned_to.chat_id:
@@ -340,6 +402,8 @@ class AssignTaskView(APIView):
                         f"👤 <b>Assigned By:</b> {assigned_by_text}"
                     )
                     send_telegram_message(assigned_to.chat_id, message_new)
+                    notification = Notification.objects.create(user=assigned_to, message=message_new)
+                    send_notification_to_user(notification)
 
             return Response(
                 {"message": "Task assigned successfully", "status": "success"},
